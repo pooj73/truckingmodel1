@@ -11,10 +11,219 @@ import fitz  # PyMuPDF
 import os
 import pandas as pd
 import json
-
-
+from flask import Flask, render_template_string, request, redirect, url_for, session
+import os
 
 app = Flask(__name__)
+app.secret_key = 'your_secret_key'
+
+# ✅ Restrict allowed users to this dictionary
+ALLOWED_USERS = {
+    "admin@example.com": {
+        "password": "admin123",
+        "fullname": "Admin User",
+        "phone": "9999999999"
+    }
+}
+
+HTML_SIGNUP_FORM = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Smart Fleet Ai - Sign Up</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0B132B] flex flex-col items-center justify-center h-screen text-white font-sans">
+  <div class="text-center mb-4">
+    <h1 class="text-4xl font-bold">Smart Fleet Ai</h1>
+    <p class="text-gray-400 mt-2">Powered by Ai Data Portal</p>
+  </div>
+  <form method="POST" action="/signup" class="bg-[#0E1A36] p-8 rounded-xl w-full max-w-sm shadow-md space-y-4">
+    <input type="text" name="fullname" placeholder="Full Name" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <input type="email" name="email" placeholder="Email" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <input type="text" name="phone" placeholder="Phone Number" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <input type="password" name="password" placeholder="Password" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <input type="password" name="confirm_password" placeholder="Confirm Password" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <button type="submit" class="w-full bg-white text-[#0B132B] font-semibold py-2 rounded-md hover:bg-gray-200 transition duration-200">
+      Sign Up
+    </button>
+    <p class="text-gray-400 text-sm text-center">Already registered? <a href="/login" class="text-blue-400">Login</a></p>
+  </form>
+</body>
+</html>
+"""
+
+HTML_LOGIN_FORM = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Smart Fleet Ai - Login</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0B132B] flex flex-col items-center justify-center h-screen text-white font-sans">
+  <div class="text-center mb-4">
+    <h1 class="text-4xl font-bold">Smart Fleet Ai</h1>
+    <p class="text-gray-400 mt-2">Login to your account</p>
+  </div>
+  <form method="POST" action="/login" class="bg-[#0E1A36] p-8 rounded-xl w-full max-w-sm shadow-md space-y-4">
+    <input type="email" name="email" placeholder="Email" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <input type="password" name="password" placeholder="Password" required class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+    <button type="submit" class="w-full bg-white text-[#0B132B] font-semibold py-2 rounded-md hover:bg-gray-200 transition duration-200">
+      Login
+    </button>
+  </form>
+</body>
+</html>
+"""
+
+@app.route('/')
+@app.route('/')
+def index():
+    return redirect(url_for('signup'))
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        fullname = request.form.get("fullname")
+        email = request.form.get("email")
+        phone = request.form.get("phone")
+        password = request.form.get("password")
+        confirm_password = request.form.get("confirm_password")
+
+        if email not in ALLOWED_USERS:
+            return "❌ This email is not allowed to register."
+
+        if password != confirm_password:
+            return "❌ Passwords do not match!"
+
+        with open("users.txt", "w") as f:
+            f.write(f"{email},{password},{fullname},{phone}\n")
+
+        return "✅ Registration successful! <a href='/login'>Click here to login</a>"
+
+    return render_template_string(HTML_SIGNUP_FORM)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form.get("email")
+        password = request.form.get("password")
+
+        allowed = ALLOWED_USERS.get(email)
+        if allowed and allowed['password'] == password:
+            session['user_email'] = email
+            session['user_name'] = allowed['fullname']
+            return redirect('/dashboard')
+
+        return "<h3>❌ Invalid credentials or access not allowed. <a href='/login'>Try again</a></h3>"
+
+    return render_template_string(HTML_LOGIN_FORM)
+
+@app.route('/dashboard')
+def dashboard():
+    if 'user_name' in session:
+        name = session['user_name']
+        return render_template_string(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Dashboard</title>
+            <style>
+                body {{ background-color: #0B132B; color: white; font-family: sans-serif; padding: 2em; }}
+                .greeting {{ font-size: 2em; font-weight: bold; color: #00FFC6; }}
+                .section {{ margin-top: 2em; font-size: 1.2em; }}
+                ul {{ line-height: 1.8em; }}
+                a.logout {{ color: #FF6B6B; font-size: 1em; display: inline-block; margin-top: 2em; }}
+            </style>
+        </head>
+        <body>
+            <div class="greeting">👋 Hello, {name}!</div>
+            <div class="section">
+                <p>Welcome to your <strong>Smart Fleet Ai Dashboard</strong> 🚛</p>
+                <ul>
+                    <li>📊 <strong>View Trip Reports</strong></li>
+                    <li>📁 <strong>Upload Files</strong></li>
+                    <li>🧮 <strong>Financial Analytics</strong></li>
+                    <li>🚀 <strong>Trip Statistics</strong></li>
+                    <li>🛠️ <strong>Trip Generator</strong> – Plan and dispatch trips</li>
+                    <li>✅ <strong>Trip Closure</strong> – Finalize completed trips</li>
+                    <li>🔍 <strong>Trip Audit</strong> – Review and validate logs</li>
+                </ul>
+                <a href="/change" class="logout">⚙️ Change Account Info</a><br>
+                <a href="/logout" class="logout">🔒 Logout</a>
+            </div>
+        </body>
+        </html>
+        """)
+    else:
+        return redirect('/login')
+
+@app.route('/change', methods=['GET', 'POST'])
+def change():
+    if 'user_email' not in session:
+        return redirect('/login')
+
+    current_email = session['user_email']
+    user = ALLOWED_USERS.get(current_email, {})
+
+    if request.method == 'POST':
+        new_name = request.form.get("new_name")
+        new_password = request.form.get("new_password")
+        new_email = request.form.get("new_email")
+        new_phone = request.form.get("new_phone")
+
+        # Update values in memory
+        if new_name:
+            user['fullname'] = new_name
+            session['user_name'] = new_name
+        if new_password:
+            user['password'] = new_password
+        if new_email and new_email != current_email:
+            ALLOWED_USERS[new_email] = ALLOWED_USERS.pop(current_email)
+            session['user_email'] = new_email
+            current_email = new_email
+        if new_phone:
+            user['phone'] = new_phone
+
+        return redirect('/dashboard')
+
+    return render_template_string(f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Update Profile</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-[#0B132B] flex items-center justify-center h-screen text-white font-sans">
+        <form method="POST" class="bg-[#0E1A36] p-8 rounded-xl w-full max-w-sm shadow-md space-y-4">
+            <h2 class="text-2xl font-bold text-center mb-4">Update Profile Info</h2>
+            <input type="text" name="new_name" placeholder="New Full Name" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+            <input type="email" name="new_email" placeholder="New Email" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+            <input type="text" name="new_phone" placeholder="New Phone Number" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+            <input type="password" name="new_password" placeholder="New Password" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
+            <button type="submit" class="w-full bg-white text-[#0B132B] font-semibold py-2 rounded-md hover:bg-gray-200 transition duration-200">
+                Update
+            </button>
+            <p class="text-center text-sm text-gray-400 mt-2"><a href="/dashboard" class="text-blue-400">← Back to Dashboard</a></p>
+        </form>
+    </body>
+    </html>
+    """)
+
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
+
+
+
+
+
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -44,7 +253,7 @@ def generate_ai_report(filtered_df):
     kms = filtered_df['Actual Distance (KM)'].sum()
     profit_pct = round((profit / rev * 100), 1) if rev else 0
     per_km = round(profit / kms, 2) if kms else 0
-
+ 
     return f"""
 📊 AI Report Highlights:
 
@@ -67,7 +276,9 @@ AI Insights:
 """
 
 @app.route('/', methods=['GET', 'POST'])
-def dashboard():
+def dashboard_main():
+
+
     global df
 
     # Upload Excel
@@ -676,7 +887,6 @@ def trip_generator():
 
 
 app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 def init_db():
     conn = sqlite3.connect('trips.db')
@@ -710,7 +920,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-@app.route('/')
 def home():
     return redirect(url_for('trip_closure'))
 
@@ -1513,5 +1722,4 @@ if __name__ == '__main__':
     init_db()
     app.run(debug=True)
  
-
 
