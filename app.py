@@ -11,20 +11,18 @@ import fitz  # PyMuPDF
 import os
 import pandas as pd
 import json
-from flask import Flask, render_template_string, request, redirect, url_for, session
+from flask import Flask, render_template_string, request, redirect, url_for, session, send_file
 import os
+import sqlite3
+import fitz  # PyMuPDF
+import pandas as pd
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
+app.config['UPLOAD_FOLDER'] = 'uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# ✅ Restrict allowed users to this dictionary
-ALLOWED_USERS = {
-    "admin@example.com": {
-        "password": "admin123",
-        "fullname": "Admin User",
-        "phone": "9999999999"
-    }
-}
+# === USER AUTH SYSTEM (YOUR CODE INSERTED HERE) ===
 
 HTML_SIGNUP_FORM = """<!DOCTYPE html>
 <html lang="en">
@@ -79,7 +77,6 @@ HTML_LOGIN_FORM = """<!DOCTYPE html>
 """
 
 @app.route('/')
-@app.route('/')
 def index():
     return redirect(url_for('signup'))
 
@@ -92,13 +89,10 @@ def signup():
         password = request.form.get("password")
         confirm_password = request.form.get("confirm_password")
 
-        if email not in ALLOWED_USERS:
-            return "❌ This email is not allowed to register."
-
         if password != confirm_password:
             return "❌ Passwords do not match!"
 
-        with open("users.txt", "w") as f:
+        with open("users.txt", "a") as f:
             f.write(f"{email},{password},{fullname},{phone}\n")
 
         return "✅ Registration successful! <a href='/login'>Click here to login</a>"
@@ -110,122 +104,33 @@ def login():
     if request.method == 'POST':
         email = request.form.get("email")
         password = request.form.get("password")
+        found = False
 
-        allowed = ALLOWED_USERS.get(email)
-        if allowed and allowed['password'] == password:
-            session['user_email'] = email
-            session['user_name'] = allowed['fullname']
-            return redirect('/dashboard')
+        if os.path.exists("users.txt"):
+            with open("users.txt", "r") as f:
+                for line in f:
+                    parts = line.strip().split(",")
+                    if len(parts) >= 4 and parts[0] == email and parts[1] == password:
+                        session['user_email'] = parts[0]
+                        session['user_name'] = parts[2]  # fullname
+                        found = True
+                        break
 
-        return "<h3>❌ Invalid credentials or access not allowed. <a href='/login'>Try again</a></h3>"
+        if found:
+            return redirect(url_for('dashboard'))
+        else:
+            return "<h3>❌ Invalid email or password. <a href='/login'>Try again</a></h3>"
 
     return render_template_string(HTML_LOGIN_FORM)
-
-@app.route('/dashboard')
-def dashboard():
-    if 'user_name' in session:
-        name = session['user_name']
-        return render_template_string(f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Dashboard</title>
-            <style>
-                body {{ background-color: #0B132B; color: white; font-family: sans-serif; padding: 2em; }}
-                .greeting {{ font-size: 2em; font-weight: bold; color: #00FFC6; }}
-                .section {{ margin-top: 2em; font-size: 1.2em; }}
-                ul {{ line-height: 1.8em; }}
-                a.logout {{ color: #FF6B6B; font-size: 1em; display: inline-block; margin-top: 2em; }}
-            </style>
-        </head>
-        <body>
-            <div class="greeting">👋 Hello, {name}!</div>
-            <div class="section">
-                <p>Welcome to your <strong>Smart Fleet Ai Dashboard</strong> 🚛</p>
-                <ul>
-                    <li>📊 <strong>View Trip Reports</strong></li>
-                    <li>📁 <strong>Upload Files</strong></li>
-                    <li>🧮 <strong>Financial Analytics</strong></li>
-                    <li>🚀 <strong>Trip Statistics</strong></li>
-                    <li>🛠️ <strong>Trip Generator</strong> – Plan and dispatch trips</li>
-                    <li>✅ <strong>Trip Closure</strong> – Finalize completed trips</li>
-                    <li>🔍 <strong>Trip Audit</strong> – Review and validate logs</li>
-                </ul>
-                <a href="/change" class="logout">⚙️ Change Account Info</a><br>
-                <a href="/logout" class="logout">🔒 Logout</a>
-            </div>
-        </body>
-        </html>
-        """)
-    else:
-        return redirect('/login')
-
-@app.route('/change', methods=['GET', 'POST'])
-def change():
-    if 'user_email' not in session:
-        return redirect('/login')
-
-    current_email = session['user_email']
-    user = ALLOWED_USERS.get(current_email, {})
-
-    if request.method == 'POST':
-        new_name = request.form.get("new_name")
-        new_password = request.form.get("new_password")
-        new_email = request.form.get("new_email")
-        new_phone = request.form.get("new_phone")
-
-        # Update values in memory
-        if new_name:
-            user['fullname'] = new_name
-            session['user_name'] = new_name
-        if new_password:
-            user['password'] = new_password
-        if new_email and new_email != current_email:
-            ALLOWED_USERS[new_email] = ALLOWED_USERS.pop(current_email)
-            session['user_email'] = new_email
-            current_email = new_email
-        if new_phone:
-            user['phone'] = new_phone
-
-        return redirect('/dashboard')
-
-    return render_template_string(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Update Profile</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-    </head>
-    <body class="bg-[#0B132B] flex items-center justify-center h-screen text-white font-sans">
-        <form method="POST" class="bg-[#0E1A36] p-8 rounded-xl w-full max-w-sm shadow-md space-y-4">
-            <h2 class="text-2xl font-bold text-center mb-4">Update Profile Info</h2>
-            <input type="text" name="new_name" placeholder="New Full Name" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
-            <input type="email" name="new_email" placeholder="New Email" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
-            <input type="text" name="new_phone" placeholder="New Phone Number" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
-            <input type="password" name="new_password" placeholder="New Password" class="w-full bg-[#1C2541] text-white placeholder-gray-400 p-3 rounded-md outline-none" />
-            <button type="submit" class="w-full bg-white text-[#0B132B] font-semibold py-2 rounded-md hover:bg-gray-200 transition duration-200">
-                Update
-            </button>
-            <p class="text-center text-sm text-gray-400 mt-2"><a href="/dashboard" class="text-blue-400">← Back to Dashboard</a></p>
-        </form>
-    </body>
-    </html>
-    """)
-
-
 
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect('/login')
+    return redirect(url_for('login'))
 
 
 
 
-
-
-app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 DEFAULT_FILE = 'fleet_50_entries.xlsx'
 uploaded_file_path = None
@@ -253,7 +158,7 @@ def generate_ai_report(filtered_df):
     kms = filtered_df['Actual Distance (KM)'].sum()
     profit_pct = round((profit / rev * 100), 1) if rev else 0
     per_km = round(profit / kms, 2) if kms else 0
- 
+
     return f"""
 📊 AI Report Highlights:
 
@@ -275,10 +180,9 @@ AI Insights:
 - Top Routes: {top_routes}
 """
 
-@app.route('/', methods=['GET', 'POST'])
-def dashboard_main():
+@app.route('/dashboard', methods=['GET', 'POST'])
 
-
+def dashboard():
     global df
 
     # Upload Excel
@@ -887,6 +791,7 @@ def trip_generator():
 
 
 app.config['UPLOAD_FOLDER'] = 'uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 def init_db():
     conn = sqlite3.connect('trips.db')
@@ -920,6 +825,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+@app.route('/')
 def home():
     return redirect(url_for('trip_closure'))
 
@@ -1722,4 +1628,5 @@ if __name__ == '__main__':
     init_db()
     app.run(debug=True)
  
+
 
