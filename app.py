@@ -884,9 +884,6 @@ def trip_generator():
                                   all_trips=all_trips)
 
 
-app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
 def init_db():
     conn = sqlite3.connect('trips.db')
     c = conn.cursor()
@@ -913,7 +910,8 @@ def init_db():
             net_profit REAL,
             payment_mode TEXT,
             pod_status TEXT,
-            trip_status TEXT
+            trip_status TEXT,
+            remarks TEXT
         )
     ''')
     conn.commit()
@@ -946,13 +944,24 @@ def trip_closure():
         ('net_profit', 'Net Profit', 'number'),
         ('payment_mode', 'Payment Mode', 'text'),
         ('pod_status', 'POD Status', 'text'),
-        ('trip_status', 'Trip Status', 'text')
+        ('trip_status', 'Trip Status', 'text'),
+        ('remarks', 'Remarks', 'text')
     ]
 
     uploaded_range = ""
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
-    status_filter = request.args.get('trip_status', '')
+    search_trip_id = request.args.get('search_trip_id', '').strip()
+    trip_data = {}
+
+    if search_trip_id:
+        conn = sqlite3.connect('trips.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM trip_closure WHERE trip_id = ?", (search_trip_id,))
+        result = c.fetchone()
+        conn.close()
+        if result:
+            trip_data = dict(zip(['trip_id'] + [f for f, _, _ in fields], result))
 
     if request.method == 'POST':
         if 'excel_file' in request.files:
@@ -961,7 +970,6 @@ def trip_closure():
                 path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
                 file.save(path)
                 df = pd.read_excel(path)
-
                 df = df[df['Trip Status'].astype(str).str.lower() == 'closed']
                 try:
                     uploaded_range = f"From {df['Actual Delivery Date'].min().strftime('%Y-%m-%d')} to {df['Actual Delivery Date'].max().strftime('%Y-%m-%d')}"
@@ -992,7 +1000,6 @@ def trip_closure():
                 conn.commit()
                 conn.close()
                 return redirect(url_for('trip_closure'))
-
         else:
             trip_id = request.form.get('trip_id', '').strip()
             if not trip_id:
@@ -1018,15 +1025,11 @@ def trip_closure():
             conn.close()
             return redirect(url_for('trip_closure'))
 
-    # ----- Display Section -----
-    query = "SELECT * FROM trip_closure WHERE 1=1"
+    query = "SELECT * FROM trip_closure"
     params = []
     if start_date and end_date:
-        query += " AND actual_delivery_date BETWEEN ? AND ?"
+        query += " WHERE actual_delivery_date BETWEEN ? AND ?"
         params.extend([start_date, end_date])
-    if status_filter:
-        query += " AND trip_status LIKE ?"
-        params.append(f"%{status_filter}%")
     query += " ORDER BY trip_id DESC"
 
     conn = sqlite3.connect('trips.db')
@@ -1054,51 +1057,55 @@ def trip_closure():
       <div class="max-w-6xl mx-auto bg-[#0B132B] p-6 rounded-lg shadow-lg">
         <h1 class="text-3xl font-semibold mb-6">Trip Closure Dashboard</h1>
 
-        <form method="get" class="mb-6 flex gap-4 flex-wrap">
+        <form method="get" class="mb-4">
+          <label class="block text-sm mb-1 text-gray-300">Search by Trip ID</label>
+          <div class="flex gap-4">
+            <input type="text" name="search_trip_id" value="{{ request.args.get('search_trip_id', '') }}" class="text-black px-4 py-2 rounded" placeholder="Enter Trip ID">
+            <button type="submit" class="bg-yellow-500 px-4 py-2 rounded hover:bg-yellow-600">Search</button>
+          </div>
+        </form>
+
+        <form method="get" class="mb-6 flex gap-4">
           <label>Start Date:
             <input type="date" name="start_date" value="{{ request.args.get('start_date', '') }}" class="text-black rounded px-2 py-1">
           </label>
           <label>End Date:
             <input type="date" name="end_date" value="{{ request.args.get('end_date', '') }}" class="text-black rounded px-2 py-1">
           </label>
-          <label>Status:
-            <select name="trip_status" class="text-black rounded px-2 py-1">
-              <option value="">All</option>
-              <option value="closed" {% if request.args.get('trip_status') == 'closed' %}selected{% endif %}>Closed</option>
-              <option value="ongoing" {% if request.args.get('trip_status') == 'ongoing' %}selected{% endif %}>Ongoing</option>
-            </select>
-          </label>
           <button type="submit" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">Filter</button>
         </form>
 
         <form method="POST" enctype="multipart/form-data" class="mb-6">
-          <label class="block text-sm text-gray-300 mb-2">Upload Trip Excel Sheet</label>
-          <input type="file" name="excel_file" accept=".xlsx,.xls" class="mb-2 px-3 py-2 rounded bg-white text-black">
+          <div class="flex justify-between items-center">
+            <label class="block text-sm text-gray-300 mb-2">Upload Trip Excel Sheet</label>
+            <span class="text-sm text-gray-400 italic">{{ uploaded_range }}</span>
+          </div>
+          <input type="file" name="excel_file" accept=".xlsx,.xls" class="mb-4 px-3 py-2 rounded bg-white text-black">
           <button type="submit" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">Upload & Insert</button>
         </form>
 
         <form method="POST" class="bg-[#3A506B] p-6 rounded-lg grid grid-cols-2 gap-4 mb-8">
           <div>
             <label class="block text-sm text-gray-200 font-bold mb-2">Trip ID</label>
-            <input name="trip_id" required class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="text" placeholder="Enter Trip ID">
+            <input name="trip_id" value="{{ trip_data.get('trip_id', '') }}" required class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="text" placeholder="Enter Trip ID to close">
           </div>
           {% for f, label, ftype in fields %}
-          <div>
-            <label class="block text-sm text-gray-200 mb-1">{{ label }}</label>
-            <input name="{{ f }}" class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="{{ ftype }}">
-          </div>
+            <div>
+              <label class="block text-sm text-gray-200 capitalize mb-2">{{ label }}</label>
+              <input name="{{ f }}" value="{{ trip_data.get(f, '') }}" class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="{{ ftype }}">
+            </div>
           {% endfor %}
-          <button type="submit" class="col-span-2 mt-4 bg-[#1C2541] px-4 py-2 rounded hover:bg-[#3A506B]">Submit Trip Closure</button>
+          <button type="submit" class="mt-6 bg-[#1C2541] hover:bg-[#3A506B] px-4 py-2 rounded text-white col-span-2">Submit Trip Closure</button>
         </form>
 
         <h2 class="text-xl font-semibold mb-4">Recent Trip Closures</h2>
         <div class="overflow-x-auto">
-          <table class="min-w-full bg-[#1C2541] text-white rounded-lg overflow-hidden">
-            <thead class="bg-[#3A506B]">
+          <table class="min-w-full bg-[#1C2541] rounded-lg overflow-hidden">
+            <thead class="bg-[#3A506B] text-white">
               <tr>
-                <th class="px-4 py-2 text-left">Trip ID</th>
+                <th class="text-left px-4 py-2">Trip ID</th>
                 {% for _, label, _ in fields %}
-                <th class="px-4 py-2 text-left">{{ label }}</th>
+                <th class="text-left px-4 py-2">{{ label }}</th>
                 {% endfor %}
               </tr>
             </thead>
@@ -1113,7 +1120,7 @@ def trip_closure():
               {% endfor %}
               {% if closures|length == 0 %}
               <tr>
-                <td colspan="{{ fields|length + 1 }}" class="text-center text-gray-400 px-4 py-4">No trip closures to show.</td>
+                <td colspan="{{ fields|length + 1 }}" class="px-4 py-2 text-center text-gray-400">No trip closures recorded yet.</td>
               </tr>
               {% endif %}
             </tbody>
@@ -1125,12 +1132,13 @@ def trip_closure():
     '''
 
     return render_template_string(html,
-        fields=fields,
-        closures=closures,
-        uploaded_range=uploaded_range,
-        total_closures=total_closures,
-        total_expense=total_expense,
-        total_profit=total_profit)
+                                  total_closures=total_closures,
+                                  total_expense=total_expense,
+                                  total_profit=total_profit,
+                                  fields=fields,
+                                  closures=closures,
+                                  uploaded_range=uploaded_range,
+                                  trip_data=trip_data)
 
 @app.route('/trip-audit')
 def trip_audit_dashboard():
