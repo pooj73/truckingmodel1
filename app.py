@@ -24,10 +24,10 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # ✅ Restrict allowed users to this dictionary
 ALLOWED_USERS = {
-    "admin@example.com": {
-        "password": "admin123",
-        "fullname": "Admin User",
-        "phone": "9999999999"
+    "travels123@gmail.com": {
+        "password": "travel1",
+        "fullname": "travel",
+        "phone": "1234567890"
     }
 }
 
