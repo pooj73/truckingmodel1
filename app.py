@@ -948,10 +948,12 @@ def trip_closure():
         ('remarks', 'Remarks', 'text')
     ]
 
-    uploaded_range = ""
+    # default filter value is 'All'
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
+    trip_status_filter = request.args.get('trip_status_filter', 'All').strip()
     search_trip_id = request.args.get('search_trip_id', '').strip()
+    uploaded_range = ""
     trip_data = {}
 
     if search_trip_id:
@@ -970,19 +972,25 @@ def trip_closure():
                 path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
                 file.save(path)
                 df = pd.read_excel(path)
-                df = df[df['Trip Status'].astype(str).str.lower() == 'closed']
-                try:
-                    uploaded_range = f"From {df['Actual Delivery Date'].min().strftime('%Y-%m-%d')} to {df['Actual Delivery Date'].max().strftime('%Y-%m-%d')}"
-                except Exception:
-                    uploaded_range = "No valid dates"
+                # drop fully empty rows
+                df.dropna(how='all', inplace=True)
+
+                # safely compute uploaded range if dates exist
+                if 'Actual Delivery Date' in df.columns:
+                    df['Actual Delivery Date'] = pd.to_datetime(df['Actual Delivery Date'], errors='coerce')
+                    if not df['Actual Delivery Date'].dropna().empty:
+                        uploaded_range = f"From {df['Actual Delivery Date'].min().strftime('%Y-%m-%d')} to {df['Actual Delivery Date'].max().strftime('%Y-%m-%d')}"
 
                 conn = sqlite3.connect('trips.db')
                 c = conn.cursor()
                 for _, row in df.iterrows():
-                    values = [row.get('Trip ID')]
+                    trip_id = row.get('Trip ID')
+                    if pd.isna(trip_id) or str(trip_id).strip().lower() in ('', 'none', 'nan'):
+                        continue
+                    values = [str(trip_id).strip()]
                     for f, label, _ in fields:
                         val = row.get(label, '')
-                        if pd.isna(val):
+                        if pd.isna(val) or str(val).strip().lower() in ('none', 'nan'):
                             val = ''
                         elif isinstance(val, pd.Timestamp):
                             val = val.strftime('%Y-%m-%d')
@@ -1012,6 +1020,9 @@ def trip_closure():
                         val = float(val) if val != '' else 0.0
                     except:
                         val = 0.0
+                # normalize literal 'none' from form inputs
+                if isinstance(val, str) and val.strip().lower() == 'none':
+                    val = ''
                 data.append(val)
             conn = sqlite3.connect('trips.db')
             c = conn.cursor()
@@ -1025,11 +1036,17 @@ def trip_closure():
             conn.close()
             return redirect(url_for('trip_closure'))
 
-    query = "SELECT * FROM trip_closure"
+    # build query with optional filters
+    query = "SELECT * FROM trip_closure WHERE 1=1"
     params = []
     if start_date and end_date:
-        query += " WHERE actual_delivery_date BETWEEN ? AND ?"
+        query += " AND actual_delivery_date BETWEEN ? AND ?"
         params.extend([start_date, end_date])
+    # only filter by status when user chooses something other than 'All'
+    if trip_status_filter and trip_status_filter.lower() != 'all':
+        # trim and lower trip_status in sqlite for robust matching
+        query += " AND LOWER(TRIM(trip_status)) = ?"
+        params.append(trip_status_filter.lower())
     query += " ORDER BY trip_id DESC"
 
     conn = sqlite3.connect('trips.db')
@@ -1065,12 +1082,20 @@ def trip_closure():
           </div>
         </form>
 
-        <form method="get" class="mb-6 flex gap-4">
+        <form method="get" class="mb-6 flex gap-4 items-end">
           <label>Start Date:
             <input type="date" name="start_date" value="{{ request.args.get('start_date', '') }}" class="text-black rounded px-2 py-1">
           </label>
           <label>End Date:
             <input type="date" name="end_date" value="{{ request.args.get('end_date', '') }}" class="text-black rounded px-2 py-1">
+          </label>
+          <label>Status:
+            <select name="trip_status_filter" class="text-black rounded px-2 py-1">
+              <option value="All" {% if request.args.get('trip_status_filter', 'All') == 'All' %}selected{% endif %}>All</option>
+              <option value="Ongoing" {% if request.args.get('trip_status_filter') == 'Ongoing' %}selected{% endif %}>Ongoing</option>
+              <option value="Closed" {% if request.args.get('trip_status_filter') == 'Closed' %}selected{% endif %}>Closed</option>
+              <option value="Under Audit" {% if request.args.get('trip_status_filter') == 'Under Audit' %}selected{% endif %}>Under Audit</option>
+            </select>
           </label>
           <button type="submit" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">Filter</button>
         </form>
