@@ -948,14 +948,13 @@ def trip_closure():
         ('remarks', 'Remarks', 'text')
     ]
 
-    # default filter value is 'All'
+    uploaded_range = ""
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
-    trip_status_filter = request.args.get('trip_status_filter', 'All').strip()
     search_trip_id = request.args.get('search_trip_id', '').strip()
-    uploaded_range = ""
     trip_data = {}
 
+    # Load trip data for editing
     if search_trip_id:
         conn = sqlite3.connect('trips.db')
         c = conn.cursor()
@@ -971,33 +970,35 @@ def trip_closure():
             if file.filename.endswith(('.xlsx', '.xls')):
                 path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
                 file.save(path)
-                df = pd.read_excel(path)
-                # drop fully empty rows
-                df.dropna(how='all', inplace=True)
 
-                # safely compute uploaded range if dates exist
+                # Robust Excel reading
+                df = pd.read_excel(path, dtype=str)
+                df.columns = df.columns.str.strip()
+                if 'Trip Status' in df.columns:
+                    df = df[df['Trip Status'].str.lower() == 'closed']
                 if 'Actual Delivery Date' in df.columns:
                     df['Actual Delivery Date'] = pd.to_datetime(df['Actual Delivery Date'], errors='coerce')
-                    if not df['Actual Delivery Date'].dropna().empty:
-                        uploaded_range = f"From {df['Actual Delivery Date'].min().strftime('%Y-%m-%d')} to {df['Actual Delivery Date'].max().strftime('%Y-%m-%d')}"
+
+                try:
+                    uploaded_range = f"From {df['Actual Delivery Date'].min().strftime('%Y-%m-%d')} to {df['Actual Delivery Date'].max().strftime('%Y-%m-%d')}"
+                except Exception:
+                    uploaded_range = "No valid dates"
 
                 conn = sqlite3.connect('trips.db')
                 c = conn.cursor()
                 for _, row in df.iterrows():
-                    trip_id = row.get('Trip ID')
-                    if pd.isna(trip_id) or str(trip_id).strip().lower() in ('', 'none', 'nan'):
-                        continue
-                    values = [str(trip_id).strip()]
+                    values = [row.get('Trip ID', '')]
                     for f, label, _ in fields:
                         val = row.get(label, '')
-                        if pd.isna(val) or str(val).strip().lower() in ('none', 'nan'):
+                        if pd.isna(val) or val is None:
                             val = ''
                         elif isinstance(val, pd.Timestamp):
                             val = val.strftime('%Y-%m-%d')
-                        elif isinstance(val, (int, float)):
-                            val = float(val)
                         else:
-                            val = str(val)
+                            try:
+                                val = float(val) if f.endswith(('distance', 'quantity', 'rate', 'cost', 'charges', 'expense', 'amount', 'profit', 'fine')) else str(val)
+                            except:
+                                val = str(val)
                         values.append(val)
                     placeholders = ','.join('?' * len(values))
                     c.execute(f'''
@@ -1008,7 +1009,9 @@ def trip_closure():
                 conn.commit()
                 conn.close()
                 return redirect(url_for('trip_closure'))
+
         else:
+            # Manual edit form save
             trip_id = request.form.get('trip_id', '').strip()
             if not trip_id:
                 return "Trip ID is required", 400
@@ -1020,9 +1023,6 @@ def trip_closure():
                         val = float(val) if val != '' else 0.0
                     except:
                         val = 0.0
-                # normalize literal 'none' from form inputs
-                if isinstance(val, str) and val.strip().lower() == 'none':
-                    val = ''
                 data.append(val)
             conn = sqlite3.connect('trips.db')
             c = conn.cursor()
@@ -1036,17 +1036,18 @@ def trip_closure():
             conn.close()
             return redirect(url_for('trip_closure'))
 
-    # build query with optional filters
-    query = "SELECT * FROM trip_closure WHERE 1=1"
+    
+    query = "SELECT * FROM trip_closure"
     params = []
     if start_date and end_date:
-        query += " AND actual_delivery_date BETWEEN ? AND ?"
+        query += " WHERE actual_delivery_date BETWEEN ? AND ?"
         params.extend([start_date, end_date])
-    # only filter by status when user chooses something other than 'All'
-    if trip_status_filter and trip_status_filter.lower() != 'all':
-        # trim and lower trip_status in sqlite for robust matching
-        query += " AND LOWER(TRIM(trip_status)) = ?"
-        params.append(trip_status_filter.lower())
+    elif start_date:
+        query += " WHERE actual_delivery_date >= ?"
+        params.append(start_date)
+    elif end_date:
+        query += " WHERE actual_delivery_date <= ?"
+        params.append(end_date)
     query += " ORDER BY trip_id DESC"
 
     conn = sqlite3.connect('trips.db')
@@ -1061,6 +1062,7 @@ def trip_closure():
     closures = c.fetchall()
     conn.close()
 
+
     html = '''
     <!DOCTYPE html>
     <html lang="en">
@@ -1069,11 +1071,20 @@ def trip_closure():
       <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
       <title>Trip Closure Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
+      <script>
+        window.addEventListener('DOMContentLoaded', function() {
+          const params = new URLSearchParams(window.location.search);
+          if (params.has('search_trip_id')) {
+            document.getElementById('edit-form').scrollIntoView({behavior: 'smooth'});
+          }
+        });
+      </script>
     </head>
     <body class="bg-gray-100 text-white font-sans p-6">
       <div class="max-w-6xl mx-auto bg-[#0B132B] p-6 rounded-lg shadow-lg">
         <h1 class="text-3xl font-semibold mb-6">Trip Closure Dashboard</h1>
 
+        <!-- Search -->
         <form method="get" class="mb-4">
           <label class="block text-sm mb-1 text-gray-300">Search by Trip ID</label>
           <div class="flex gap-4">
@@ -1082,24 +1093,18 @@ def trip_closure():
           </div>
         </form>
 
-        <form method="get" class="mb-6 flex gap-4 items-end">
+        <!-- Date Filter -->
+        <form method="get" class="mb-6 flex gap-4">
           <label>Start Date:
             <input type="date" name="start_date" value="{{ request.args.get('start_date', '') }}" class="text-black rounded px-2 py-1">
           </label>
           <label>End Date:
             <input type="date" name="end_date" value="{{ request.args.get('end_date', '') }}" class="text-black rounded px-2 py-1">
           </label>
-          <label>Status:
-            <select name="trip_status_filter" class="text-black rounded px-2 py-1">
-              <option value="All" {% if request.args.get('trip_status_filter', 'All') == 'All' %}selected{% endif %}>All</option>
-              <option value="Ongoing" {% if request.args.get('trip_status_filter') == 'Ongoing' %}selected{% endif %}>Ongoing</option>
-              <option value="Closed" {% if request.args.get('trip_status_filter') == 'Closed' %}selected{% endif %}>Closed</option>
-              <option value="Under Audit" {% if request.args.get('trip_status_filter') == 'Under Audit' %}selected{% endif %}>Under Audit</option>
-            </select>
-          </label>
           <button type="submit" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">Filter</button>
         </form>
 
+        <!-- Upload Excel -->
         <form method="POST" enctype="multipart/form-data" class="mb-6">
           <div class="flex justify-between items-center">
             <label class="block text-sm text-gray-300 mb-2">Upload Trip Excel Sheet</label>
@@ -1109,7 +1114,8 @@ def trip_closure():
           <button type="submit" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">Upload & Insert</button>
         </form>
 
-        <form method="POST" class="bg-[#3A506B] p-6 rounded-lg grid grid-cols-2 gap-4 mb-8">
+        <!-- Edit Form (Always on Top) -->
+        <form id="edit-form" method="POST" class="bg-[#3A506B] p-6 rounded-lg grid grid-cols-2 gap-4 mb-8">
           <div>
             <label class="block text-sm text-gray-200 font-bold mb-2">Trip ID</label>
             <input name="trip_id" value="{{ trip_data.get('trip_id', '') }}" required class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="text" placeholder="Enter Trip ID to close">
@@ -1123,6 +1129,7 @@ def trip_closure():
           <button type="submit" class="mt-6 bg-[#1C2541] hover:bg-[#3A506B] px-4 py-2 rounded text-white col-span-2">Submit Trip Closure</button>
         </form>
 
+        <!-- Table -->
         <h2 class="text-xl font-semibold mb-4">Recent Trip Closures</h2>
         <div class="overflow-x-auto">
           <table class="min-w-full bg-[#1C2541] rounded-lg overflow-hidden">
@@ -1137,7 +1144,9 @@ def trip_closure():
             <tbody>
               {% for row in closures %}
               <tr class="border-b border-gray-600">
-                <td class="px-4 py-2">{{ row[0] }}</td>
+                <td class="px-4 py-2">
+                  <a href="?search_trip_id={{ row[0] }}{% if start_date %}&start_date={{ start_date }}{% endif %}{% if end_date %}&end_date={{ end_date }}{% endif %}" class="text-blue-400 hover:underline">{{ row[0] }}</a>
+                </td>
                 {% for i in range(1, fields|length + 1) %}
                 <td class="px-4 py-2">{{ row[i] }}</td>
                 {% endfor %}
@@ -1151,10 +1160,31 @@ def trip_closure():
             </tbody>
           </table>
         </div>
+
+        {% if trip_data %}
+        <!-- Second Edit Form (Below Table) -->
+        <h2 class="text-xl font-semibold mt-8 mb-4">Edit Trip: {{ trip_data['trip_id'] }}</h2>
+        <form method="POST" class="bg-[#3A506B] p-6 rounded-lg grid grid-cols-2 gap-4 mb-8">
+          <div>
+            <label class="block text-sm text-gray-200 font-bold mb-2">Trip ID</label>
+            <input name="trip_id" value="{{ trip_data.get('trip_id', '') }}" required class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="text" readonly>
+          </div>
+          {% for f, label, ftype in fields %}
+            <div>
+              <label class="block text-sm text-gray-200 capitalize mb-2">{{ label }}</label>
+              <input name="{{ f }}" value="{{ trip_data.get(f, '') }}" class="w-full px-3 py-2 rounded bg-gray-200 text-black" type="{{ ftype }}">
+            </div>
+          {% endfor %}
+          <button type="submit" class="mt-6 bg-[#1C2541] hover:bg-[#3A506B] px-4 py-2 rounded text-white col-span-2">Update Trip</button>
+        </form>
+        {% endif %}
+
       </div>
     </body>
     </html>
     '''
+
+
 
     return render_template_string(html,
                                   total_closures=total_closures,
@@ -1163,7 +1193,9 @@ def trip_closure():
                                   fields=fields,
                                   closures=closures,
                                   uploaded_range=uploaded_range,
-                                  trip_data=trip_data)
+                                  trip_data=trip_data,
+                                  start_date=start_date,
+                                  end_date=end_date)
 
 @app.route('/trip-audit')
 def trip_audit_dashboard():
