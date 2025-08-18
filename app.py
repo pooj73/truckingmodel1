@@ -302,8 +302,8 @@ uploaded_trip_stats_file = None
 def load_excel(file_path):
     df = pd.read_excel(file_path)
     df.columns = df.columns.str.strip()
-    #df['Trip Date'] = pd.to_datetime(df['Trip Date'], errors='coerce')
-    #df['Day'] = df['Trip Date'].dt.day
+    df['Trip Date'] = pd.to_datetime(df['Trip Date'], errors='coerce')
+    df['Day'] = df['Trip Date'].dt.day
     return df
 
 df = load_excel(DEFAULT_FILE)
@@ -1838,6 +1838,7 @@ if __name__ == '__main__':
     init_db()
     app.run(host="0.0.0.0",port=5000, debug=True)
  
+
 
 
 
