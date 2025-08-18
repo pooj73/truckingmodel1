@@ -306,7 +306,7 @@ def load_excel(file_path):
     df['Day'] = df['Trip Date'].dt.day
     return df
 
-df = load_excel(DEFAULT_FILE)
+#df = load_excel(DEFAULT_FILE)
 
 def generate_ai_report(filtered_df):
     if filtered_df.empty:
@@ -1838,5 +1838,6 @@ if __name__ == '__main__':
     init_db()
     app.run(host="0.0.0.0",port=5000, debug=True)
  
+
 
 
