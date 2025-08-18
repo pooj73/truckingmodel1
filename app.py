@@ -1,6 +1,3 @@
-
-  
-
 from flask import Flask, request, render_template_string, send_file, redirect, url_for
 
 from werkzeug.security import generate_password_hash
@@ -19,12 +16,30 @@ import pandas as pd
 
 import sqlite3
 
+
+
 # ✅ Create trip_closure table
 def init_db():
     conn = sqlite3.connect('trips.db')
     c = conn.cursor()
     c.execute('''
-        CREATE TABLE IF NOT EXISTS trip_closure (
+        CREATE TABLE IF NOT EXISTS trips (
+            trip_id TEXT,
+            trip_date TEXT,
+            vehicle_id TEXT,
+            driver_id TEXT,
+            planned_distance REAL,
+            advance_given REAL,
+            origin TEXT,
+            destination TEXT,
+            vehicle_type TEXT,
+            flags TEXT,
+            total_freight REAL
+        )
+    ''')
+    c.execute('DROP TABLE IF EXISTS trip_closure')
+    c.execute('''
+            CREATE TABLE IF NOT EXISTS trip_closure (
             trip_id TEXT PRIMARY KEY,
             actual_distance REAL,
             actual_delivery_date TEXT,
@@ -48,30 +63,7 @@ def init_db():
             pod_status TEXT,
             trip_status TEXT,
             remarks TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-# ✅ Create trips table
-def init_trips_table():
-    conn = sqlite3.connect('trips.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS trips (
-            trip_id TEXT,
-            trip_date TEXT,
-            vehicle_id TEXT,
-            driver_id TEXT,
-            planned_distance REAL,
-            advance_given REAL,
-            origin TEXT,
-            destination TEXT,
-            vehicle_type TEXT,
-            flags TEXT,
-            total_freight REAL
-        )
-    ''')
+        )''')
     conn.commit()
     conn.close()
 
@@ -80,6 +72,20 @@ app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+
+UPLOAD_FOLDER = os.path.join(app.root_path, 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
+
+
+# Global file trackers
+uploaded_file = None
+uploaded_trip_stats_file = None   # ✅ separate tracker if needed
+DEFAULT_FILE = os.path.join(app.config['UPLOAD_FOLDER'], "Trip_Closure_Sheet_Oct2024_Mar2025.xlsx")
+
 
 # ✅ Allowed users
 ALLOWED_USERS = {
@@ -337,7 +343,7 @@ AI Insights:
 - Top Routes: {top_routes}
 """
 
-@app.route('/dashboard', methods=['GET', 'POST'])
+@app.route('/dashboard',  methods=["GET", "POST"])
 
 def dashboard():
     global df
@@ -473,8 +479,9 @@ def dashboard():
     if (!file) return;
     const formData = new FormData();
     formData.append('excel', file);
+    
 
-    fetch('/', {
+    fetch('/dashboard', {
       method: 'POST',
       body: formData
     })
@@ -756,7 +763,8 @@ def update_rights():
                 'add_fields': 'add_fields' in request.form
             }
             break
-    return redirect(url_for('user_settings'))  
+    return redirect(url_for('user_settings'))  # ✅ Correct route name here
+
     
 # === PDF Parser ===
 def parse_pdf(filepath):
@@ -887,12 +895,6 @@ def trip_generator():
           </div>
         </div>
 
-        <form method="POST" enctype="multipart/form-data" class="mb-4 bg-[#3A506B] p-4 rounded">
-          <label class="block text-sm text-gray-200 mb-2">Upload Trip PDF or Excel:</label>
-          <input type="file" name="pdf_file" accept=".pdf" class="w-full p-2 mb-2 bg-gray-200 text-black rounded">
-          <input type="file" name="excel_file" accept=".xlsx" class="w-full p-2 mb-2 bg-gray-200 text-black rounded">
-          <button type="submit" class="bg-[#1C2541] hover:bg-[#3A506B] px-4 py-2 rounded text-white">Upload & Autofill</button>
-        </form>
 
         <form method="POST" class="bg-[#3A506B] p-6 rounded-lg grid grid-cols-2 gap-4">
           {% for field in [
@@ -947,42 +949,11 @@ def trip_generator():
                                   all_trips=all_trips)
 
 
-def init_db():
-    conn = sqlite3.connect('trips.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS trip_closure (
-            trip_id TEXT PRIMARY KEY,
-            actual_distance REAL,
-            actual_delivery_date TEXT,
-            trip_delay_reason TEXT,
-            fuel_quantity REAL,
-            fuel_rate REAL,
-            fuel_cost REAL,
-            toll_charges REAL,
-            food_expense REAL,
-            lodging_expense REAL,
-            miscellaneous_expense REAL,
-            maintenance_cost REAL,
-            loading_charges REAL,
-            unloading_charges REAL,
-            penalty_fine REAL,
-            total_trip_expense REAL,
-            freight_amount REAL,
-            incentives REAL,
-            net_profit REAL,
-            payment_mode TEXT,
-            pod_status TEXT,
-            trip_status TEXT,
-            remarks TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
 
 @app.route('/')
 def home():
     return redirect(url_for('trip_closure'))
+
 
 @app.route('/trip-closure', methods=['GET', 'POST'])
 def trip_closure():
@@ -1016,6 +987,20 @@ def trip_closure():
     end_date = request.args.get('end_date', '')
     search_trip_id = request.args.get('search_trip_id', '').strip()
     trip_data = {}
+    
+    filter_status = request.args.get('filter_status', 'all').lower()
+    
+    # Load trip data for editing
+    if filter_status:
+        conn = sqlite3.connect('trips.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM trip_closure WHERE trip_status LIKE ?", (filter_status,))
+        result = c.fetchone()
+        conn.close()
+        if result:
+            # Zip trip_id + fields to match SELECT * order
+            trip_data = dict(zip(['trip_id'] + [f for f, _, _ in fields], result))
+        
 
     # Load trip data for editing
     if search_trip_id:
@@ -1025,6 +1010,7 @@ def trip_closure():
         result = c.fetchone()
         conn.close()
         if result:
+            # Zip trip_id + fields to match SELECT * order
             trip_data = dict(zip(['trip_id'] + [f for f, _, _ in fields], result))
 
     if request.method == 'POST':
@@ -1037,10 +1023,10 @@ def trip_closure():
                 # Robust Excel reading
                 df = pd.read_excel(path, dtype=str)
                 df.columns = df.columns.str.strip()
-                if 'Trip Status' in df.columns:
-                    df = df[df['Trip Status'].str.lower() == 'closed']
-                if 'Actual Delivery Date' in df.columns:
-                    df['Actual Delivery Date'] = pd.to_datetime(df['Actual Delivery Date'], errors='coerce')
+                # if 'Trip Status' in df.columns:
+                #     df = df[df['Trip Status'].str.lower() == 'closed']
+                # if 'Actual Delivery Date' in df.columns:
+                #     df['Actual Delivery Date'] = pd.to_datetime(df['Actual Delivery Date'], errors='coerce')
 
                 try:
                     uploaded_range = f"From {df['Actual Delivery Date'].min().strftime('%Y-%m-%d')} to {df['Actual Delivery Date'].max().strftime('%Y-%m-%d')}"
@@ -1090,16 +1076,15 @@ def trip_closure():
             conn = sqlite3.connect('trips.db')
             c = conn.cursor()
             placeholders = ','.join('?' * len(data))
+            columns = ','.join(['trip_id'] + [f for f, _, _ in fields])
             c.execute(f'''
-                INSERT OR REPLACE INTO trip_closure (
-                    trip_id, {','.join(f for f, _, _ in fields)}
-                ) VALUES ({placeholders})
+                INSERT OR REPLACE INTO trip_closure ({columns})
+                VALUES ({placeholders})
             ''', data)
             conn.commit()
             conn.close()
             return redirect(url_for('trip_closure'))
 
-    
     query = "SELECT * FROM trip_closure"
     params = []
     if start_date and end_date:
@@ -1119,8 +1104,8 @@ def trip_closure():
     total_closures = c.fetchone()[0]
     c.execute("SELECT SUM(total_trip_expense), SUM(net_profit) FROM trip_closure")
     sums = c.fetchone()
-    total_expense = sums[0] or 0.0
-    total_profit = sums[1] or 0.0
+    total_expense = sums or 0.0
+    total_profit = sums or 0.0
     c.execute(query, params)
     closures = c.fetchall()
     conn.close()
@@ -1166,7 +1151,7 @@ def trip_closure():
           </label>
           <button type="submit" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">Filter</button>
         </form>
-
+        
         <!-- Upload Excel -->
         <form method="POST" enctype="multipart/form-data" class="mb-6">
           <div class="flex justify-between items-center">
@@ -1259,6 +1244,9 @@ def trip_closure():
                                   trip_data=trip_data,
                                   start_date=start_date,
                                   end_date=end_date)
+
+
+
 
 @app.route('/trip-audit')
 def trip_audit_dashboard():
@@ -1475,7 +1463,7 @@ def financial_dashboard():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
             file.save(filepath)
             uploaded_file_path = filepath
-            return redirect(url_for('dashboard'))
+            return redirect(url_for('financial_dashboard'))
 
     file_to_use = uploaded_file_path if uploaded_file_path else DEFAULT_FILE
     df = load_financial_data(file_to_use)
